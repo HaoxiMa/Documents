@@ -1,0 +1,352 @@
+---
+title: "R Leaflet and Shiny"
+author: "Haoxi Ma"
+date: "2/22/2021"
+output:
+  ioslides_presentation: default
+  slidy_presentation: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r,include=FALSE}
+library(leaflet)
+library(dplyr)
+library(RCurl)
+library(rgdal)
+library(htmltools)
+```
+
+## R Leaflet
+
+Before starting, let's see a basic example first:
+```{r}
+m <- leaflet() %>%
+  addTiles() %>%
+  setView(lng=104.1954, lat=35.8617, zoom=3) %>%
+  addMarkers(lng=116.4074, lat=39.9042,popup = "Capital of China")
+m
+```
+
+## R Leaflet
+
+Leaflet is one of the most popular open-source JavaScript libraries for interactive and dynamic maps, and the R package "leaflet" makes it easy to integrate and control Leaflet maps in R. 
+
+<br>
+**You create a Leaflet map with these basic steps:**
+
+1. Create a map widget by calling leaflet().<br>
+2. Add layers to the map by using layer functions (e.g. addTiles, addMarkers, addPolygons) to modify the map widget.<br>
+3. Repeat step 2 as desired.<br>
+4. Print the map widget to display it.<br>
+
+## Empirical Study
+
+<br>
+We are going to construct a dynamic and interactive map to show daily new case and new death of COVID-19 in different states.
+
+<br>
+In order to build a daily updated R shiny application later, we choosed the data provided by Johns Hopkins Whiting School of Engineering, and the link is https://github.com/CSSEGISandData/COVID-19.
+
+<br>
+Besides, we also need to download a US states' **shapefile** for drawing corresponding polygons from United States Census Bureau.
+
+## Data Preprocessing 
+
+```{r,include=FALSE}
+case.data <- getURL('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv')
+raw_case <- read.csv(text = case.data,header=T)
+death.data<-getURL("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv")
+raw_death<-read.csv(text=death.data,header=T)
+
+case<-raw_case %>% select(c(7,(ncol(raw_case)-1),ncol(raw_case))) 
+case$daily.newcase<-case[,3]-case[,2]
+case<- case %>% rename(States=Province_State) %>% group_by(States) %>%
+  summarise(new.case=sum(daily.newcase))
+
+death<-raw_death %>% select(c(7,(ncol(raw_death)-1),ncol(raw_death))) 
+death$daily.newdeath<-death[,3]-death[,2]
+death<- death %>% rename(States=Province_State) %>% group_by(States) %>%
+  summarise(new.death=sum(daily.newdeath))
+
+final_data<-merge(case,death)
+```
+
+After data manipulations, we get the dataset shown below:
+```{r,echo=TRUE}
+head(final_data,n=5)
+```
+Then, we import the shapfile using readOGR() function in rgdal package:
+```{r,message=FALSE,warning=FALSE,results="hide",echo=T}
+states.shape<-readOGR("cb_2018_us_state_500k/cb_2018_us_state_500k.shp")
+```
+## Aligning Data with Shapefile {.smaller}
+
+We should align the **name** and **order** of the states in dataset with them in the shapefile.
+
+```{r,echo=T,results="hide"}
+is.element(final_data$States,states.shape$NAME)
+final_data<-final_data[-c(10,14),]
+final_data$States<-factor(final_data$States)
+levels(final_data$States)[38]<-"Commonwealth of the Northern Mariana Islands"
+levels(final_data$States)[51]<-"United States Virgin Islands"
+final_data<-final_data[order(match(final_data$States,states.shape$NAME)),]
+```
+
+```{r,echo=T}
+head(final_data,n=3);states.shape$NAME[1:3]
+```
+## Construct the basic map
+
+```{r,echo=T}
+Dmap<-leaflet(height = 300, width = 750) %>% #build a leaflet objection
+  addProviderTiles(provider = providers$Stamen.Toner) %>%
+  setView(lng = -96,lat = 37.8,zoom = 3.5) #localize the map
+Dmap
+```
+
+## Add states' polygons layer {.smaller}
+
+```{r,echo=T}
+#create the color pallet
+bins<-c(0,10,100,500,2500,5000,10000,15000,Inf)
+pal<-colorBin("RdYlBu",domain = c(0,1),bins = bins)
+```
+
+```{r,echo=T}
+Dmap<-leaflet() %>% 
+  addProviderTiles(provider = providers$Stamen.Toner) %>%
+  setView(lng = -96,lat = 37.8,zoom = 3.5) %>%
+  ### <b>
+  addPolygons(data = states.shape,
+              weight = 1, #boundary thickness
+              color = "white", #boundary color
+              fillOpacity = 0.5, #opacity of polygons
+              fillColor = pal(final_data$new.case)
+              ) %>%
+    addLegend(pal=pal,
+            values = final_data$new.case,
+            opacity = 0.7,
+            position = "topright")
+   ###</b>
+```
+
+
+## Add states' polygons layer
+```{r}
+Dmap
+```
+
+## Highlight Options {.smaller}
+
+```{r,echo=T}
+Dmap<-leaflet() %>% 
+  addProviderTiles(provider = providers$Stamen.Toner) %>%
+  setView(lng = -96,lat = 37.8,zoom = 3.5) %>%
+  addPolygons(data = states.shape,
+              weight = 1, #boundary thickness
+              color = "white", #boundary color
+              fillOpacity = 0.5, #opacity of polygons
+              fillColor = pal(final_data$new.case),
+              ### <b>
+              highlightOptions = highlightOptions(
+                weight = 5,
+                color = "#666666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE
+              )) %>%
+              ### </b>
+    addLegend(pal=pal,
+            values = final_data$new.case,
+            opacity = 0.7,
+            position = "topright")
+```
+
+## Highlight Options
+
+```{r}
+Dmap
+```
+
+## Add labels {.smaller}
+
+```{r,echo=T}
+case.labels<-paste("<p>",final_data$States,"</p>",
+                 "<p>","Daily new case: ",final_data$new.case,"</p>",sep="")
+
+Dmap<-leaflet() %>% 
+  addProviderTiles(provider = providers$Stamen.Toner) %>%
+  setView(lng = -96,lat = 37.8,zoom = 3.5) %>%
+  addPolygons(data = states.shape, 
+              weight = 1, 
+              color = "white", 
+              fillOpacity = 0.5, 
+              fillColor = pal(final_data$new.case),
+              ### <b>
+              label = lapply(case.labels,HTML),
+              ### </b>
+              highlightOptions = highlightOptions(
+                weight = 5,
+                color = "#666666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE
+              )) %>%
+  addLegend(pal=pal, 
+            values = final_data$new.case, 
+            opacity = 0.7)
+```
+
+## Add labels 
+
+```{r}
+Dmap
+```
+
+## Interactive plots {.smaller}
+ 
+```{r}
+death.labels<-paste("<p>",final_data$States,"</p>",
+                    "<p>","Daily new death: ",final_data$new.death,"</p>",sep="")
+```
+
+```{r,echo=T,results="hide",warning=FALSE}
+Dmap<-leaflet() %>% 
+  addProviderTiles(provider = providers$Stamen.Toner) %>%
+  setView(lng = -96,lat = 37.8,zoom = 3.5) %>%
+  addPolygons(data = states.shape, weight = 1, color = "white", fillOpacity = 0.5, 
+              ### <b>
+              fillColor = pal(final_data$new.case),
+              label = lapply(case.labels,HTML),
+              group = "case",
+              ### </b>
+              highlightOptions = highlightOptions(
+                weight = 5,
+                color = "#666666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE
+              )) %>%
+  addPolygons(data = states.shape, weight = 1, color = "white", fillOpacity = 0.5, 
+              ### <b>
+              fillColor = pal(final_data$new.death),
+              label = lapply(death.labels,HTML),
+              group = "death",
+              ### </b>
+              highlightOptions = highlightOptions(
+                weight = 5,
+                color = "#666666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE
+              )) %>%
+  ### <b>
+  addLayersControl(baseGroups = c("case","death"))
+  ### </b>
+```
+## Interactive plots
+
+```{r}
+Dmap
+```
+
+## R Shiny
+
+Shiny is an R package that makes it easy to build interactive web apps straight from R. 
+
+**There are three components:**
+
+1.A user interface object(ui):<br>
+which controls the layout and appearance of your app<br>
+
+2.A server function:<br>
+which contains the instructions that your computer needs to build your app<br>
+
+3.A statement to run the application 
+
+## Demo {.smaller}
+
+```{r,eval=FALSE,echo=TRUE}
+library(shiny)
+library(shinydashboard)
+
+ui <- dashboardPage(
+    dashboardSidebar(
+      #1.Add control widgets
+    ),
+    dashboardBody(
+      #2.create a output object 
+    )
+)
+
+server <- function(input, output) {
+  
+  #3.reactive expressions
+  
+  #4.R code to build your output
+  
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+## Brief Explanation {.smaller}
+
+***Control widgets:***<br>
+A web element that your users can interact with.
+
+***Create a output object:***<br>
+e.g. plotOutput("Hello") creates a plot output named "Hello" in your user interface.
+
+***Reactive expressions:***<br>
+A reactive expression saves its result the first time you run it. The next time the reactive expression is called, it checks whether the widgets it depends on have changed. If the value is out of date, the reactive object will recalculate it,and if not, return the saved value without doing any computation.
+
+***R code to build your output:***<br>
+e.g. output$Hello<-renderPlot({}) will construct your plot output.
+
+## Tips {.bigger}
+
+<br>
+Every time users open your R shiny application, R shiny will run all code in your script. Every time users change the widgets' values, R shiny will run the code in server function.
+
+<br>
+When name, try your best to use the easy-understanding names. This will help a lot in a large project.
+
+<br>
+Arrange and note your code properly. This helps all time.
+
+## R Tutoring {.smaller}
+
+**In "dplyr" package**
+
+%>%: This operator will forward a value, or the result of an expression, into the next function call/expression
+
+select(): Select variables(by names or index) in a dataframe
+
+group_by(): Group the dataframe by some variables
+
+summarise(): Summarise each group to fewer rows
+
+**In "base" package:**
+
+merge(): Merge two dataframes by a same index
+
+match(): Returns a vector of the positions of matches of its first argument in its second
+
+lapply(): Apply a function over a vector
+
+## Conclusion {.bigger}
+
+Now, we are familiar with R leaflet and R shiny, and it's time to wirte code.<br>
+
+Soon, the code will be updated on https://github.com/HaoxiMa.
+
+Welcome to talk with me through:<br>
+
+Linkedin: https://www.linkedin.com/in/haoxi-ma-60850a1a1/ <br>
+
+Email: haoxi.ma@uconn.edu
+
+
+
+
+
